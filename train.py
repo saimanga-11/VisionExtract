@@ -6,6 +6,7 @@ import segmentation_models_pytorch as smp
 
 from dataset import SegmentationDataset
 from metrics import evaluate_all    # ✅ NEW METRICS
+from prepare_data import DATASET_DIR, prepare_data
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -13,18 +14,31 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # Load datasets
 # -------------------------
 
-train_dataset = SegmentationDataset(
-    "dataset/train/images",
-    "dataset/train/masks"
-)
+splits = prepare_data()
+train_image_dir = DATASET_DIR / "DUTS-TR" / "DUTS-TR-Image"
+train_mask_dir = DATASET_DIR / "DUTS-TR" / "DUTS-TR-Mask"
+test_image_dir = DATASET_DIR / "DUTS-TE" / "DUTS-TE-Image"
+test_mask_dir = DATASET_DIR / "DUTS-TE" / "DUTS-TE-Mask"
 
+train_dataset = SegmentationDataset(
+    str(train_image_dir),
+    str(train_mask_dir),
+    image_names=splits["train"]
+)
 val_dataset = SegmentationDataset(
-    "dataset/val/images",
-    "dataset/val/masks"
+    str(train_image_dir),
+    str(train_mask_dir),
+    image_names=splits["val"]
+)
+test_dataset = SegmentationDataset(
+    str(test_image_dir),
+    str(test_mask_dir),
+    image_names=splits["test"]
 )
 
 train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
 # -------------------------
 # Model
@@ -149,3 +163,39 @@ for epoch in range(epochs):
 print("Training Finished")
 print(f"Best Epoch: {best_epoch}")
 print(f"Best Validation Accuracy: {best_val_accuracy:.4f}")
+
+# -------------------------
+# Test best checkpoint
+# -------------------------
+
+model.load_state_dict(torch.load("best_model.pth", map_location=device))
+model.eval()
+
+test_accuracy = 0
+test_dice = 0
+test_iou = 0
+
+with torch.no_grad():
+
+    for images, masks in test_loader:
+
+        images = images.to(device)
+        masks = masks.to(device)
+
+        preds = model(images)
+        preds_bin = (torch.sigmoid(preds) > 0.5).float()
+
+        correct = (preds_bin == masks).float().sum()
+        test_accuracy += (correct / torch.numel(preds_bin)).item()
+
+        metrics = evaluate_all(preds_bin.cpu().numpy(), masks.cpu().numpy())
+        test_dice += metrics["Dice"]
+        test_iou += metrics["IoU"]
+
+test_accuracy /= len(test_loader)
+test_dice /= len(test_loader)
+test_iou /= len(test_loader)
+
+print(f"Test Accuracy: {test_accuracy:.4f}")
+print(f"Test Dice: {test_dice:.4f}")
+print(f"Test IoU: {test_iou:.4f}")
