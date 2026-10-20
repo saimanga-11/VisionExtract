@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -23,7 +24,8 @@ test_mask_dir = DATASET_DIR / "DUTS-TE" / "DUTS-TE-Mask"
 train_dataset = SegmentationDataset(
     str(train_image_dir),
     str(train_mask_dir),
-    image_names=splits["train"]
+    image_names=splits["train"],
+    augment=True,
 )
 val_dataset = SegmentationDataset(
     str(train_image_dir),
@@ -50,13 +52,58 @@ model = smp.Unet(
     classes=1
 ).to(device)
 
-loss_fn = nn.BCEWithLogitsLoss()
+bce_loss_fn = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.0001)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode="max",
+    factor=0.5,
+    patience=2,
+)
 
 epochs = 15
 
-best_val_accuracy = 0
+def dice_loss(logits, masks, smooth=1.0):
+    probabilities = torch.sigmoid(logits)
+    probabilities = probabilities.flatten(start_dim=1)
+    masks = masks.flatten(start_dim=1)
+    intersection = (probabilities * masks).sum(dim=1)
+    dice = (2 * intersection + smooth) / (
+        probabilities.sum(dim=1) + masks.sum(dim=1) + smooth
+    )
+    return 1 - dice.mean()
+
+
+def evaluate(loader):
+    model.eval()
+    totals = {
+        "IoU": 0.0,
+        "Dice": 0.0,
+        "Precision": 0.0,
+        "Recall": 0.0,
+        "Accuracy": 0.0,
+    }
+
+    with torch.no_grad():
+        for images, masks in loader:
+            images = images.to(device)
+            masks = masks.to(device)
+            predictions = (torch.sigmoid(model(images)) > 0.5).float()
+            metrics = evaluate_all(predictions.cpu().numpy(), masks.cpu().numpy())
+            for name, value in metrics.items():
+                totals[name] += value
+
+    return {name: value / len(loader) for name, value in totals.items()}
+
+
+best_val_iou = -1.0
 best_epoch = 0
+
+if os.path.exists("best_model.pth"):
+    model.load_state_dict(torch.load("best_model.pth", map_location=device))
+    initial_metrics = evaluate(val_loader)
+    best_val_iou = initial_metrics["IoU"]
+    print(f"Resuming from best_model.pth (validation IoU: {best_val_iou:.4f})")
 
 # -------------------------
 # Training Loop
@@ -67,8 +114,6 @@ for epoch in range(epochs):
     model.train()
 
     train_loss = 0
-    train_accuracy = 0
-
     for images, masks in train_loader:
 
         images = images.to(device)
@@ -76,7 +121,7 @@ for epoch in range(epochs):
 
         preds = model(images)
 
-        loss = loss_fn(preds, masks)
+        loss = bce_loss_fn(preds, masks) + dice_loss(preds, masks)
 
         optimizer.zero_grad()
         loss.backward()
@@ -84,56 +129,14 @@ for epoch in range(epochs):
 
         train_loss += loss.item()
 
-        preds_bin = torch.sigmoid(preds)
-        preds_bin = (preds_bin > 0.5).float()
-
-        correct = (preds_bin == masks).float().sum()
-        accuracy = correct / torch.numel(preds_bin)
-
-        train_accuracy += accuracy.item()
-
     train_loss /= len(train_loader)
-    train_accuracy /= len(train_loader)
 
     # -------------------------
     # Validation
     # -------------------------
 
-    model.eval()
-
-    val_accuracy = 0
-    val_dice = 0
-    val_iou = 0
-
-    with torch.no_grad():
-
-        for images, masks in val_loader:
-
-            images = images.to(device)
-            masks = masks.to(device)
-
-            preds = model(images)
-
-            preds_bin = torch.sigmoid(preds)
-            preds_bin = (preds_bin > 0.5).float()
-
-            # Accuracy
-            correct = (preds_bin == masks).float().sum()
-            accuracy = correct / torch.numel(preds_bin)
-            val_accuracy += accuracy.item()
-
-            # ✅ Convert to numpy for metrics
-            pred_np = preds_bin.cpu().numpy()
-            mask_np = masks.cpu().numpy()
-
-            metrics = evaluate_all(pred_np, mask_np)
-
-            val_dice += metrics["Dice"]
-            val_iou += metrics["IoU"]
-
-    val_accuracy /= len(val_loader)
-    val_dice /= len(val_loader)
-    val_iou /= len(val_loader)
+    val_metrics = evaluate(val_loader)
+    scheduler.step(val_metrics["IoU"])
 
     # -------------------------
     # Print results
@@ -141,18 +144,20 @@ for epoch in range(epochs):
 
     print(f"Epoch {epoch+1}/{epochs}")
     print(f"Train Loss: {train_loss:.4f}")
-    print(f"Train Accuracy: {train_accuracy:.4f}")
-    print(f"Validation Accuracy: {val_accuracy:.4f}")
-    print(f"Validation Dice: {val_dice:.4f}")
-    print(f"Validation IoU: {val_iou:.4f}")
+    print(f"Validation IoU: {val_metrics['IoU']:.4f}")
+    print(f"Validation Dice: {val_metrics['Dice']:.4f}")
+    print(f"Validation Precision: {val_metrics['Precision']:.4f}")
+    print(f"Validation Recall: {val_metrics['Recall']:.4f}")
+    print(f"Validation Accuracy: {val_metrics['Accuracy']:.4f}")
+    print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.6g}")
     print("--------------------------------------------------")
 
     # -------------------------
     # Save best model
     # -------------------------
 
-    if val_accuracy > best_val_accuracy:
-        best_val_accuracy = val_accuracy
+    if val_metrics["IoU"] > best_val_iou:
+        best_val_iou = val_metrics["IoU"]
         best_epoch = epoch + 1
         torch.save(model.state_dict(), "best_model.pth")
 
@@ -162,40 +167,13 @@ for epoch in range(epochs):
 
 print("Training Finished")
 print(f"Best Epoch: {best_epoch}")
-print(f"Best Validation Accuracy: {best_val_accuracy:.4f}")
+print(f"Best Validation IoU: {best_val_iou:.4f}")
 
 # -------------------------
 # Test best checkpoint
 # -------------------------
 
 model.load_state_dict(torch.load("best_model.pth", map_location=device))
-model.eval()
-
-test_accuracy = 0
-test_dice = 0
-test_iou = 0
-
-with torch.no_grad():
-
-    for images, masks in test_loader:
-
-        images = images.to(device)
-        masks = masks.to(device)
-
-        preds = model(images)
-        preds_bin = (torch.sigmoid(preds) > 0.5).float()
-
-        correct = (preds_bin == masks).float().sum()
-        test_accuracy += (correct / torch.numel(preds_bin)).item()
-
-        metrics = evaluate_all(preds_bin.cpu().numpy(), masks.cpu().numpy())
-        test_dice += metrics["Dice"]
-        test_iou += metrics["IoU"]
-
-test_accuracy /= len(test_loader)
-test_dice /= len(test_loader)
-test_iou /= len(test_loader)
-
-print(f"Test Accuracy: {test_accuracy:.4f}")
-print(f"Test Dice: {test_dice:.4f}")
-print(f"Test IoU: {test_iou:.4f}")
+test_metrics = evaluate(test_loader)
+for name, value in test_metrics.items():
+    print(f"Test {name}: {value:.4f}")

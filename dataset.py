@@ -1,15 +1,33 @@
 import os
+import random
 import cv2
+import numpy as np
 import torch
+from PIL import Image as PILImage
 from torch.utils.data import Dataset
+from torchvision.transforms import ColorJitter
 
 
 class SegmentationDataset(Dataset):
 
-    def __init__(self, image_dir, mask_dir, size=(256, 256), image_names=None):
+    def __init__(
+        self,
+        image_dir,
+        mask_dir,
+        size=(256, 256),
+        image_names=None,
+        augment=False,
+    ):
         self.image_dir = image_dir
         self.mask_dir = mask_dir
         self.size = size
+        self.augment = augment
+        self.color_jitter = ColorJitter(
+            brightness=0.2,
+            contrast=0.2,
+            saturation=0.2,
+            hue=0.05,
+        )
         candidate_names = image_names
         if candidate_names is None:
             candidate_names = sorted(
@@ -51,12 +69,29 @@ class SegmentationDataset(Dataset):
         image = cv2.imread(img_path)
         if image is None:
             raise ValueError(f"Unable to read image: {img_path}")
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         # Read mask
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         if mask is None:
             raise ValueError(f"Unable to read mask: {mask_path}")
+
+        if self.augment:
+            if random.random() < 0.5:
+                image = cv2.flip(image, 1)
+                mask = cv2.flip(mask, 1)
+
+            height, width = image.shape[:2]
+            crop_height = random.randint(max(1, int(height * 0.8)), height)
+            crop_width = random.randint(max(1, int(width * 0.8)), width)
+            top = random.randint(0, height - crop_height)
+            left = random.randint(0, width - crop_width)
+            image = image[top:top + crop_height, left:left + crop_width]
+            mask = mask[top:top + crop_height, left:left + crop_width]
+
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image = np.asarray(self.color_jitter(PILImage.fromarray(image)))
+        else:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         # Resize (VERY IMPORTANT for model consistency)
         image = cv2.resize(image, self.size)
