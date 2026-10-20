@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import segmentation_models_pytorch as smp
 
 from dataset import SegmentationDataset
-from model import UNet              # ✅ U-NET
 from metrics import evaluate_all    # ✅ NEW METRICS
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -30,7 +30,11 @@ val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
 # Model
 # -------------------------
 
-model = UNet().to(device)
+model = smp.Unet(
+    encoder_name="resnet34",
+    in_channels=3,
+    classes=1
+).to(device)
 
 loss_fn = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.0001)

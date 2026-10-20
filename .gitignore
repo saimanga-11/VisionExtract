@@ -6,8 +6,7 @@ __pycache__/
 *.pyc
 
 # Dataset (large files)
-dataset/images/
-dataset/masks/
+dataset/
 
 
 # Model weights

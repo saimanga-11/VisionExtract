@@ -1,5 +1,7 @@
 import os
 
+import cv2
+import numpy as np
 import streamlit as st
 from PIL import Image
 import torch
@@ -63,13 +65,13 @@ model = smp.Unet(
     classes=1
 )
 
-model_path = "model.pth"
-model.load_state_dict(torch.load(model_path, map_location=device))
-model.to(device)
-model.eval()
+model_path = "best_model.pth"
 if not os.path.exists(model_path):
     st.error("Model file not found. Please train the model first.")
     st.stop()
+model.load_state_dict(torch.load(model_path, map_location=device))
+model.to(device)
+model.eval()
 # -------------------------------
 # Upload Section
 # -------------------------------
@@ -92,13 +94,11 @@ if uploaded_file is not None:
         image = Image.open(uploaded_file).convert("RGB")
         orig_width, orig_height = image.size
 
-        # Resize for model
-        input_size = 256
-        transform = T.Compose([
-            T.Resize((input_size, input_size)),
-            T.ToTensor(),
-        ])
-        input_tensor = transform(image).unsqueeze(0).to(device)
+        # Match the training dataset's RGB resize and normalization.
+        image_array = np.asarray(image)
+        image_array = cv2.resize(image_array, (256, 256))
+        image_array = image_array.astype("float32") / 255.0
+        input_tensor = torch.from_numpy(image_array).permute(2, 0, 1).unsqueeze(0).to(device)
 
         # Model inference
         with torch.no_grad():
