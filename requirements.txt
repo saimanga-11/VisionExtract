@@ -2,6 +2,6 @@ torch
 torchvision
 opencv-python
 numpy
-tqdm 
-matplotlib
-scikit-learn
+streamlit
+segmentation-models-pytorch
+pillow
