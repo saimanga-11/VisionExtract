@@ -38,9 +38,15 @@ test_dataset = SegmentationDataset(
     image_names=splits["test"]
 )
 
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+train_loader = DataLoader(
+    train_dataset, batch_size=16, shuffle=True, num_workers=2, pin_memory=True
+)
+val_loader = DataLoader(
+    val_dataset, batch_size=16, shuffle=False, num_workers=2, pin_memory=True
+)
+test_loader = DataLoader(
+    test_dataset, batch_size=16, shuffle=False, num_workers=2, pin_memory=True
+)
 
 # -------------------------
 # Model
@@ -48,6 +54,7 @@ test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
 model = smp.Unet(
     encoder_name="resnet34",
+    encoder_weights=None,
     in_channels=3,
     classes=1
 ).to(device)
