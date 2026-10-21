@@ -58,20 +58,27 @@ st.markdown('<p class="sub-text">Subject Isolation from Images</p>', unsafe_allo
 # -------------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = smp.Unet(
-    encoder_name="resnet34",
-    encoder_weights=None,
-    in_channels=3,
-    classes=1
-)
-
 model_path = "best_model.pth"
 if not os.path.exists(model_path):
     st.error("Model file not found. Please train the model first.")
     st.stop()
-model.load_state_dict(torch.load(model_path, map_location=device))
-model.to(device)
-model.eval()
+
+
+@st.cache_resource
+def load_model():
+    model = smp.Unet(
+        encoder_name="resnet34",
+        encoder_weights=None,
+        in_channels=3,
+        classes=1
+    )
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+    return model
+
+
+model = load_model()
 # -------------------------------
 # Upload Section
 # -------------------------------
